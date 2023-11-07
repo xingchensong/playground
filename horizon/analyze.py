@@ -52,3 +52,27 @@ with open(profile_path, "r") as f:
         name = k
         if name not in dic:
             dic[name] = v["avg_time"]
+        else:
+            dic[name] = dic[name] + v["avg_time"]
+    sorted_dic = dict(sorted(dic.items(), key=lambda kv: -kv[1]))
+    for (k, v) in sorted_dic.items():
+        topk = topk - 1
+        if topk == 0:
+            break
+        print("{}: {:.3f}".format(k, v))
+
+    topk = 15
+    print("=========Sorted CPU&BPU (standalone)OPs, Top {}======".format(topk))
+    dic.clear()
+    for (k, v) in latency.items():
+        name = k
+        if name not in dic:
+            dic[name] = v["avg_time"]
+        else:
+            dic[name] = dic[name] + v["avg_time"]
+    sorted_dic = dict(sorted(dic.items(), key=lambda kv: -kv[1]))
+    for (k, v) in sorted_dic.items():
+        topk = topk - 1
+        if topk == 0:
+            break
+        print("{}: {:.3f}".format(k, v))
