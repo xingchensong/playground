@@ -35,6 +35,7 @@ class Net(nn.Module):
 ### Running the example (ggml)
 
 ```bash
+cd ../ggml
 python train.py  # (optional, a pretrained model is provided in assests)
 python convert-h5-to-ggml.py ./assets/mnist_model.state_dict ./assets/ggml-model-f32.bin
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -46,6 +47,7 @@ cmake --build build -j 4
 ### Running the example (xcsong-ml)
 
 ```bash
+cd ../refc
 python convert_state_dict.py assets/mnist_model.state_dict assets/xcml-model-f32.txt  # (optional, a pre-converted model is provided in assests)
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j 4
