@@ -242,6 +242,7 @@ int mnist_eval(
     ggml_graph_compute_with_ctx(ctx0, gf, n_threads);
 
     ggml_graph_dump_dot(gf, NULL, "mnist.dot");
+    ggml_graph_print   (gf);
 
     if (fname_cgraph) {
         // export the compute graph for later use
