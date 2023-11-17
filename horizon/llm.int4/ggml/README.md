@@ -15,5 +15,5 @@ Computation graph:
 python train.py  # (optional, a pretrained model is provided in assests)
 python convert-h5-to-ggml.py ./assets/mnist_model.state_dict ./assets/ggml-model-f16.bin
 ./build/bin/mnist-quantize ./assets/ggml-model-f16.bin ./assets/ggml-model-q8_0.bin q8_0
-./build/bin/mnist ./assets/ggml-model-q8_0.bin ./assets/t10k-images.idx3-ubyte
+./build/bin/mnist ./assets/ggml-model-q8_0.bin ./assets/t10k-images.idx3-ubyte 1
 ```

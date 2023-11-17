@@ -267,8 +267,8 @@ int main(int argc, char ** argv) {
     srand(time(NULL));
     ggml_time_init();
 
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s models/mnist/ggml-model-f32.bin models/mnist/t10k-images.idx3-ubyte\n", argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s models/mnist/ggml-model-f32.bin models/mnist/t10k-images.idx3-ubyte 3\n", argv[0]);
         exit(0);
     }
 
@@ -299,7 +299,7 @@ int main(int argc, char ** argv) {
         }
 
         // seek to a random digit: 16-byte header + 28*28 * (random 0 - 10000)
-        fin.seekg(16 + 784 * (rand() % 10000));
+        fin.seekg(16 + 784 * atoi(argv[3]));
         fin.read((char *) &buf, sizeof(buf));
     }
 
