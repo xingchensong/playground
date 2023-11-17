@@ -20,7 +20,7 @@ struct mnist_hparams {
     int32_t n_input   = 784;
     int32_t n_hidden  = 512;
     int32_t n_classes = 10;
-    int32_t ftype     = 1;
+    int32_t ftype     = 0;
 };
 
 struct mnist_model {
@@ -142,7 +142,7 @@ bool mnist_model_load(const std::string & fname, mnist_model & model) {
 
             ggml_tensor * tensor;
             if (name == "fc1_weight") {
-              model.fc1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F16,
+              model.fc1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                                                     model.hparams.n_input, model.hparams.n_hidden);
               tensor = model.fc1_weight;
               ggml_set_name(model.fc1_weight, "fc1_weight");

@@ -18,7 +18,7 @@ struct mnist_hparams {
     int32_t n_input   = 784;
     int32_t n_hidden  = 512;
     int32_t n_classes = 10;
-    int32_t ftype     = 1;
+    int32_t ftype     = 0;
 };
 
 // quantize a model
