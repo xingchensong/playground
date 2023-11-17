@@ -18,8 +18,9 @@
 // default hparams
 struct mnist_hparams {
     int32_t n_input   = 784;
-    int32_t n_hidden  = 500;
+    int32_t n_hidden  = 512;
     int32_t n_classes = 10;
+    int32_t ftype     = 1;
 };
 
 struct mnist_model {
@@ -59,17 +60,40 @@ bool mnist_model_load(const std::string & fname, mnist_model & model) {
     size_t ctx_size = 0;
 
     {
+        auto & hparams = model.hparams;
+
+        fin.read((char *) &hparams.n_input,   sizeof(hparams.n_input));
+        fin.read((char *) &hparams.n_hidden,  sizeof(hparams.n_hidden));
+        fin.read((char *) &hparams.n_classes, sizeof(hparams.n_classes));
+        fin.read((char *) &hparams.ftype,     sizeof(hparams.ftype));
+
+        const int32_t qntvr = hparams.ftype / GGML_QNT_VERSION_FACTOR;
+
+        printf("%s: n_input   = %d\n", __func__, hparams.n_input);
+        printf("%s: n_hidden  = %d\n", __func__, hparams.n_hidden);
+        printf("%s: n_classes = %d\n", __func__, hparams.n_classes);
+        printf("%s: ftype   = %d\n", __func__, hparams.ftype);
+        printf("%s: qntvr   = %d\n", __func__, qntvr);
+
+        hparams.ftype %= GGML_QNT_VERSION_FACTOR;
+    }
+
+    // for the big tensors, we have the option to store the data in 16-bit floats or quantized
+    // in order to save memory and also to speed up the computation
+    ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
+    if (wtype == GGML_TYPE_COUNT) {
+        fprintf(stderr, "%s: invalid model file '%s' (bad ftype value %d)\n",
+                __func__, fname.c_str(), model.hparams.ftype);
+        return false;
+    }
+
+    {
         const auto & hparams = model.hparams;
+        ctx_size += hparams.n_input * hparams.n_hidden * ggml_type_sizef(GGML_TYPE_F32); // fc1 weight
+        ctx_size +=                   hparams.n_hidden * ggml_type_sizef(GGML_TYPE_F32); // fc1 bias
 
-        const int n_input   = hparams.n_input;
-        const int n_hidden  = hparams.n_hidden;
-        const int n_classes = hparams.n_classes;
-
-        ctx_size += n_input * n_hidden * ggml_type_sizef(GGML_TYPE_F32); // fc1 weight
-        ctx_size +=           n_hidden * ggml_type_sizef(GGML_TYPE_F32); // fc1 bias
-
-        ctx_size += n_hidden * n_classes * ggml_type_sizef(GGML_TYPE_F32); // fc2 weight
-        ctx_size +=            n_classes * ggml_type_sizef(GGML_TYPE_F32); // fc2 bias
+        ctx_size += hparams.n_hidden * hparams.n_classes * ggml_type_sizef(wtype); // fc2 weight
+        ctx_size +=                    hparams.n_classes * ggml_type_sizef(GGML_TYPE_F32); // fc2 bias
 
         printf("%s: ggml ctx size = %6.2f MB\n", __func__, ctx_size/(1024.0*1024.0));
     }
@@ -89,71 +113,83 @@ bool mnist_model_load(const std::string & fname, mnist_model & model) {
         }
     }
 
-    // Read FC1 layer 1
+    // load weight
     {
-        // Read dimensions
-        int32_t n_dims;
-        fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
+        size_t total_size = 0;
 
-        {
-            int32_t ne_weight[2] = { 1, 1 };
-            for (int i = 0; i < n_dims; ++i) {
-                fin.read(reinterpret_cast<char *>(&ne_weight[i]), sizeof(ne_weight[i]));
+        while (true) {
+            int32_t n_dims;
+            int32_t length;
+            int32_t ttype;
+
+            fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
+            fin.read(reinterpret_cast<char *>(&length), sizeof(length));
+            fin.read(reinterpret_cast<char *>(&ttype),  sizeof(ttype));
+
+            if (fin.eof()) {
+                break;
             }
 
-            // FC1 dimensions taken from file, eg. 768x500
-            model.hparams.n_input  = ne_weight[0];
-            model.hparams.n_hidden = ne_weight[1];
-
-            model.fc1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, model.hparams.n_input, model.hparams.n_hidden);
-            fin.read(reinterpret_cast<char *>(model.fc1_weight->data), ggml_nbytes(model.fc1_weight));
-            ggml_set_name(model.fc1_weight, "fc1_weight");
-        }
-
-        {
-            int32_t ne_bias[2] = { 1, 1 };
+            int32_t nelements = 1;
+            int32_t ne[2] = { 1, 1 };
             for (int i = 0; i < n_dims; ++i) {
-                fin.read(reinterpret_cast<char *>(&ne_bias[i]), sizeof(ne_bias[i]));
+                fin.read(reinterpret_cast<char *>(&ne[i]), sizeof(ne[i]));
+                nelements *= ne[i];
             }
 
-            model.fc1_bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_hidden);
-            fin.read(reinterpret_cast<char *>(model.fc1_bias->data), ggml_nbytes(model.fc1_bias));
-            ggml_set_name(model.fc1_bias, "fc1_bias");
+            std::string name(length, 0);
+            fin.read(&name[0], length);
 
-            // just for testing purposes, set some parameters to non-zero
-            model.fc1_bias->op_params[0] = 0xdeadbeef;
-        }
-    }
-
-    // Read FC2 layer 2
-    {
-        // Read dimensions
-        int32_t n_dims;
-        fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
-
-        {
-            int32_t ne_weight[2] = { 1, 1 };
-            for (int i = 0; i < n_dims; ++i) {
-                fin.read(reinterpret_cast<char *>(&ne_weight[i]), sizeof(ne_weight[i]));
+            ggml_tensor * tensor;
+            if (name == "fc1_weight") {
+              model.fc1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F16,
+                                                    model.hparams.n_input, model.hparams.n_hidden);
+              tensor = model.fc1_weight;
+              ggml_set_name(model.fc1_weight, "fc1_weight");
+            } else if (name == "fc1_bias") {
+              model.fc1_bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_hidden);
+              tensor = model.fc1_bias;
+              ggml_set_name(model.fc1_bias, "fc1_bias");
+            } else if (name == "fc2_weight") {
+              model.fc2_weight = ggml_new_tensor_2d(ctx, wtype,
+                                                    model.hparams.n_hidden, model.hparams.n_classes);
+              tensor = model.fc2_weight;
+              ggml_set_name(model.fc2_weight, "fc2_weight");
+            } else {
+              model.fc2_bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_classes);
+              tensor = model.fc2_bias;
+              ggml_set_name(model.fc2_bias, "fc2_bias");
             }
 
-            // FC1 dimensions taken from file, eg. 10x500
-            model.hparams.n_classes = ne_weight[1];
-
-            model.fc2_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, model.hparams.n_hidden, model.hparams.n_classes);
-            fin.read(reinterpret_cast<char *>(model.fc2_weight->data), ggml_nbytes(model.fc2_weight));
-            ggml_set_name(model.fc2_weight, "fc2_weight");
-        }
-
-        {
-            int32_t ne_bias[2] = { 1, 1 };
-            for (int i = 0; i < n_dims; ++i) {
-                fin.read(reinterpret_cast<char *>(&ne_bias[i]), sizeof(ne_bias[i]));
+            if (ggml_nelements(tensor) != nelements) {
+                fprintf(stderr, "%s: tensor '%s' has wrong size in model file\n", __func__, name.c_str());
+                return false;
             }
 
-            model.fc2_bias = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_classes);
-            fin.read(reinterpret_cast<char *>(model.fc2_bias->data), ggml_nbytes(model.fc2_bias));
-            ggml_set_name(model.fc2_bias, "fc2_bias");
+            if (tensor->ne[0] != ne[0] || tensor->ne[1] != ne[1]) {
+                fprintf(stderr, "%s: tensor '%s' has wrong shape in model file: got [%d, %d], expected [%d, %d]\n",
+                        __func__, name.c_str(), (int) tensor->ne[0], (int) tensor->ne[1], ne[0], ne[1]);
+                return false;
+            }
+
+            // for debugging
+            if (0) {
+                printf("%24s - [%5d, %5d], type = %6s, %6.2f MB, %9zu bytes\n",
+                    name.c_str(), ne[0], ne[1], ggml_type_name(ggml_type(ttype)),
+                    ggml_nbytes(tensor)/1024.0/1024.0, ggml_nbytes(tensor));
+            }
+
+            const size_t bpe = ggml_type_size(ggml_type(ttype));
+
+            if ((nelements*bpe)/ggml_blck_size(tensor->type) != ggml_nbytes(tensor)) {
+                fprintf(stderr, "%s: tensor '%s' has wrong size in model file: got %zu, expected %zu\n",
+                        __func__, name.c_str(), ggml_nbytes(tensor), nelements*bpe);
+                return false;
+            }
+
+            fin.read(reinterpret_cast<char *>(tensor->data), ggml_nbytes(tensor));
+
+            total_size += ggml_nbytes(tensor);
         }
     }
 
@@ -198,15 +234,13 @@ int mnist_eval(
     ggml_tensor * fc1 = ggml_add(ctx0, ggml_mul_mat(ctx0, model.fc1_weight, input),                model.fc1_bias);
     ggml_tensor * fc2 = ggml_add(ctx0, ggml_mul_mat(ctx0, model.fc2_weight, ggml_relu(ctx0, fc1)), model.fc2_bias);
 
-    // soft max
-    ggml_tensor * probs = ggml_soft_max(ctx0, fc2);
+    ggml_tensor * probs = fc2;
     ggml_set_name(probs, "probs");
 
     // build / export / run the computation graph
     ggml_build_forward_expand(gf, probs);
     ggml_graph_compute_with_ctx(ctx0, gf, n_threads);
 
-    //ggml_graph_print   (&gf);
     ggml_graph_dump_dot(gf, NULL, "mnist.dot");
 
     if (fname_cgraph) {
@@ -219,48 +253,14 @@ int mnist_eval(
 
     const float * probs_data = ggml_get_data_f32(probs);
 
+    for (int i = 0; i < 10; ++i) { printf("%d: %f\n", i, probs_data[i]); }
+
     const int prediction = std::max_element(probs_data, probs_data + 10) - probs_data;
 
     ggml_free(ctx0);
 
     return prediction;
 }
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int wasm_eval(uint8_t * digitPtr) {
-    mnist_model model;
-    if (!mnist_model_load("models/mnist/ggml-model-f32.bin", model)) {
-        fprintf(stderr, "error loading model\n");
-        return -1;
-    }
-    std::vector<float> digit(digitPtr, digitPtr + 784);
-    int result = mnist_eval(model, 1, digit, nullptr);
-    ggml_free(model.ctx);
-
-    return result;
-}
-
-int wasm_random_digit(char * digitPtr) {
-    auto fin = std::ifstream("models/mnist/t10k-images.idx3-ubyte", std::ios::binary);
-    if (!fin) {
-        fprintf(stderr, "failed to open digits file\n");
-        return 0;
-    }
-    srand(time(NULL));
-
-    // Seek to a random digit: 16-byte header + 28*28 * (random 0 - 10000)
-    fin.seekg(16 + 784 * (rand() % 10000));
-    fin.read(digitPtr, 784);
-
-    return 1;
-}
-
-#ifdef __cplusplus
-}
-#endif
 
 int main(int argc, char ** argv) {
     srand(time(NULL));
