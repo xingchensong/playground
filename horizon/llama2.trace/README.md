@@ -33,7 +33,6 @@ python trace.py --n_layers 2 --input_length 1 --cache_size 4096
 |   ·-- llama2-7B-chat-hf-prefill-inputlen1000-nlayers2-cachesize4096.traced.pt
 |-- model
 |   |-- model.py
-|   ·-- model_per_block.py
 |-- requirements.txt
 ·-- trace.py
 ```
