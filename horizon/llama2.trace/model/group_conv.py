@@ -50,7 +50,7 @@ class HorizonGroupConv(torch.nn.Module):
         np.testing.assert_allclose(
             orig_result.detach().cpu().numpy(),
             new_result.detach().cpu().numpy(),
-            rtol=1e-02, atol=1e-03)
+            rtol=1e-07, atol=1e-05)
         print("check HorizonGroupConv, pass!")
 
 
