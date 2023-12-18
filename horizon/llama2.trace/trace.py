@@ -5,6 +5,7 @@
 import argparse
 import torch
 import os
+import logging
 
 from hbdk4.compiler.torch import statistics
 
@@ -12,6 +13,8 @@ from model.model import ModelArgs, Transformer
 
 
 def main():
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s %(levelname)s %(message)s')
     parser = argparse.ArgumentParser(description='trace llama2')
     parser.add_argument('--input_length', type=int, default=1000,
                         help='length of tokens, 1000 for prefill, \
@@ -26,23 +29,34 @@ def main():
     model_args = ModelArgs(n_layers=args.n_layers,
                            max_seq_len=args.cache_size)
     model = Transformer(model_args)
-    print(model)
     model.eval().cpu().float()
+
+    logging.info(model)
+
     input_ids = torch.randint(0, model_args.vocab_size,
                               (1, args.input_length)).long().cpu()
-    dummy_inputs = (input_ids, torch.tensor(0).long())
+    # prefill mode
+    if args.input_length > 1:
+        assert args.cache_size > args.input_length
+        dummy_inputs = (input_ids, torch.tensor(0).long())
+    # decode mode
+    else:
+        dummy_inputs = (input_ids, torch.tensor(args.cache_size - 1).long())
     traced_model = torch.jit.trace(model, dummy_inputs,
                                    check_trace=False, strict=False)
+
     os.makedirs("exp", exist_ok=True)
     traced_model.save(
-        "exp/llama2-7B-chat-hf-" +
+        "exp/llama2-7B-chat-hf-{}-".format(
+            "prefill" if args.input_length > 1 else "decode") +
         "inputlen{}-nlayers{}-cachesize{}.traced.pt".format(
             args.input_length, args.n_layers, args.cache_size))
-    print("Trace Done")
+    logging.info("Trace Done")
+
     traced_model(*(dummy_inputs))
-    print(traced_model.graph)
+    logging.info(traced_model.graph)
     statistics(traced_model, dummy_inputs)
-    print("Statistics Done")
+    logging.info("Statistics Done")
 
 
 if __name__ == "__main__":
