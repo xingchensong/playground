@@ -12,6 +12,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from model.group_conv import HorizonGroupConv
+
 
 @dataclass
 class ModelArgs:
@@ -27,6 +29,8 @@ class ModelArgs:
 
     max_batch_size: int = 32
     max_seq_len: int = 4096
+    group_conv: bool = False
+    block_size: int = 32
 
 
 class RMSNorm(torch.nn.Module):
@@ -196,10 +200,10 @@ class Attention(nn.Module):
             n_local_kv_heads (int): Number of local key and value heads.
             n_rep (int): Number of repetitions for local heads.
             head_dim (int): Dimension size of each attention head.
-            wq (nn.Linear): Linear transformation for queries.
-            wk (nn.Linear): Linear transformation for keys.
-            wv (nn.Linear): Linear transformation for values.
-            wo (nn.Linear): Linear transformation for output.
+            wq (nn.Linear or HorizonGroupConv): Linear for queries.
+            wk (nn.Linear or HorizonGroupConv): Linear for keys.
+            wv (nn.Linear or HorizonGroupConv): Linear for values.
+            wo (nn.Linear or HorizonGroupConv): Linear for output.
             cache_k (torch.Tensor): Cached keys for attention.
             cache_v (torch.Tensor): Cached values for attention.
 
@@ -233,6 +237,12 @@ class Attention(nn.Module):
             args.dim,
             bias=False,
         )
+
+        if args.group_conv:
+            self.wq = HorizonGroupConv(self.wq, args.block_size)
+            self.wk = HorizonGroupConv(self.wk, args.block_size)
+            self.wv = HorizonGroupConv(self.wv, args.block_size)
+            self.wo = HorizonGroupConv(self.wo, args.block_size)
 
         self.cache_k = torch.zeros((
             args.max_batch_size,
@@ -310,41 +320,37 @@ class FeedForward(nn.Module):
 
     def __init__(
         self,
-        dim: int,
-        hidden_dim: int,
-        multiple_of: int,
-        ffn_dim_multiplier: Optional[float],
+        args: ModelArgs,
     ):
         """
         Initialize the FeedForward module.
 
         Args:
-            dim (int): Input dimension.
-            hidden_dim (int): Hidden dimension of the feedforward layer.
-            multiple_of (int): Value to ensure hidden dimension is a
-                multiple of this value.
-            ffn_dim_multiplier (float, optional): Custom multiplier for
-                hidden dimension. Defaults to None.
+            args (ModelArgs): Model configuration parameters.
 
         Attributes:
-            w1 (nn.Linear): Linear transformation for the
-                first layer.
-            w2 (nn.Linear): Linear transformation for the second layer.
-            w3 (nn.Linear): Linear transformation for the
-                third layer.
+            w1 (nn.Linear or HorizonGroupConv): Linear for the first layer.
+            w2 (nn.Linear or HorizonGroupConv): Linear for the second layer.
+            w3 (nn.Linear or HorizonGroupConv): Linear for the third layer.
 
         """
         super().__init__()
+        hidden_dim = args.dim * 4
         hidden_dim = int(2 * hidden_dim / 3)
         # custom dim factor multiplier
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = multiple_of * (
-            (hidden_dim + multiple_of - 1) // multiple_of)
+        if args.ffn_dim_multiplier is not None:
+            hidden_dim = int(args.ffn_dim_multiplier * hidden_dim)
+        hidden_dim = args.multiple_of * (
+            (hidden_dim + args.multiple_of - 1) // args.multiple_of)
 
-        self.w1 = torch.nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = torch.nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = torch.nn.Linear(dim, hidden_dim, bias=False)
+        self.w1 = torch.nn.Linear(args.dim, hidden_dim, bias=False)
+        self.w2 = torch.nn.Linear(hidden_dim, args.dim, bias=False)
+        self.w3 = torch.nn.Linear(args.dim, hidden_dim, bias=False)
+
+        if args.group_conv:
+            self.w1 = HorizonGroupConv(self.w1, args.block_size)
+            self.w2 = HorizonGroupConv(self.w2, args.block_size)
+            self.w3 = HorizonGroupConv(self.w3, args.block_size)
 
     def forward(self, x):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
@@ -376,12 +382,7 @@ class TransformerBlock(nn.Module):
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
         self.attention = Attention(args)
-        self.feed_forward = FeedForward(
-            dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            ffn_dim_multiplier=args.ffn_dim_multiplier,
-        )
+        self.feed_forward = FeedForward(args)
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
@@ -449,6 +450,8 @@ class Transformer(nn.Module):
         self.output = torch.nn.Linear(params.dim,
                                       params.vocab_size,
                                       bias=False)
+        if params.group_conv:
+            self.output = HorizonGroupConv(self.output, params.block_size)
 
         self.freqs_cis = precompute_freqs_cis(
             self.params.dim // self.params.n_heads,

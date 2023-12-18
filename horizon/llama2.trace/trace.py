@@ -24,10 +24,16 @@ def main():
                               others for decode')
     parser.add_argument('--n_layers', type=int, default=32,
                         help='number of layers')
+    parser.add_argument('--group_conv', default=False, action='store_true',
+                        help='use group_conv instead of nn.Linear')
+    parser.add_argument('--block_size', type=int, default=32,
+                        help='block_size used in group_conv')
     args = parser.parse_args()
 
     model_args = ModelArgs(n_layers=args.n_layers,
-                           max_seq_len=args.cache_size)
+                           max_seq_len=args.cache_size,
+                           group_conv=args.group_conv,
+                           block_size=args.block_size)
     model = Transformer(model_args)
     model.eval().cpu().float()
 
@@ -46,11 +52,14 @@ def main():
                                    check_trace=False, strict=False)
 
     os.makedirs("exp", exist_ok=True)
-    traced_model.save(
-        "exp/llama2-7B-chat-hf-{}-".format(
-            "prefill" if args.input_length > 1 else "decode") +
-        "inputlen{}-nlayers{}-cachesize{}.traced.pt".format(
-            args.input_length, args.n_layers, args.cache_size))
+    save_name = "exp/llama2-7B-chat-hf-{}-".format(
+        "prefill" if args.input_length > 1 else "decode"
+    ) + "inputlen{}-nlayers{}-cachesize{}".format(
+            args.input_length, args.n_layers, args.cache_size)
+    if args.group_conv:
+        save_name += "-useGconv-block{}".format(args.block_size)
+    save_name += ".traced.pt"
+    traced_model.save(save_name)
     logging.info("Trace Done")
 
     traced_model(*(dummy_inputs))

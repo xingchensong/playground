@@ -22,6 +22,11 @@ python trace.py --n_layers 2 --input_length 1000 --cache_size 4096
 python trace.py --n_layers 2 --input_length 1 --cache_size 4096
 ```
 
+3. decode 阶段模型导出 (以2层block的模型为例,同时使用 groupconv 替代 nn.Linear)
+```sh
+python trace.py --n_layers 2 --input_length 1 --cache_size 4096 --group_conv --block_size 32
+```
+
 
 文件目录如下：
 
@@ -30,9 +35,11 @@ python trace.py --n_layers 2 --input_length 1 --cache_size 4096
 |-- README.md
 |-- exp
 |   |-- llama2-7B-chat-hf-decode-inputlen1-nlayers2-cachesize4096.traced.pt
+|   |-- llama2-7B-chat-hf-decode-inputlen1-nlayers2-cachesize4096-useGconv-block32.traced.pt
 |   ·-- llama2-7B-chat-hf-prefill-inputlen1000-nlayers2-cachesize4096.traced.pt
 |-- model
 |   |-- model.py
+|   ·-- group_conv.py
 |-- requirements.txt
 ·-- trace.py
 ```
