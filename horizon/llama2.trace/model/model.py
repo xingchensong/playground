@@ -19,15 +19,14 @@ class ModelArgs:
     n_layers: int = 32
     n_heads: int = 32
     n_kv_heads: Optional[int] = None
-    # defined later by tokenizer
-    vocab_size: int = -1
+    vocab_size: int = 32000
     # make SwiGLU hidden layer size multiple of large power of 2
     multiple_of: int = 256
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
 
     max_batch_size: int = 32
-    max_seq_len: int = 2048
+    max_seq_len: int = 4096
 
 
 class RMSNorm(torch.nn.Module):
@@ -240,13 +239,13 @@ class Attention(nn.Module):
             args.max_seq_len,
             self.n_local_kv_heads,
             self.head_dim,
-        )).cuda()
+        ))
         self.cache_v = torch.zeros((
             args.max_batch_size,
             args.max_seq_len,
             self.n_local_kv_heads,
             self.head_dim,
-        )).cuda()
+        ))
 
     def forward(
         self,
@@ -452,12 +451,8 @@ class Transformer(nn.Module):
                                       bias=False)
 
         self.freqs_cis = precompute_freqs_cis(
-            # Note that self.params.max_seq_len is multiplied by 2 because
-            # the token limit for the Llama 2 generation of models is 4096.
-            # Adding this multiplier instead of using 4096 directly allows
-            # for dynamism of token lengths while training or fine-tuning.
             self.params.dim // self.params.n_heads,
-            self.params.max_seq_len * 2)
+            self.params.max_seq_len)
 
     @torch.inference_mode()
     def forward(self, tokens: torch.Tensor, start_pos: torch.Tensor):
