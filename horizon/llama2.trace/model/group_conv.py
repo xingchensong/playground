@@ -38,7 +38,7 @@ class HorizonGroupConv(torch.nn.Module):
         out = self.group_conv(hidden)  # (B, Cout * n_group, T)
         out = out.reshape(B, self.num_groups, self.odim, T)
         out = torch.sum(out, dim=1)  # (B, Cout, T)
-        out = out.transpose(1, 2)  # (B, Cout, T) -> (B, T, Cout)
+        out = out.transpose(1, 2).contiguous()  # (B, Cout, T) -> (B, T, Cout)
         return out
 
     def check_equal(self, module):
