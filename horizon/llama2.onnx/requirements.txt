@@ -1,0 +1,6 @@
+torch==2.1.2+cu118
+onnx
+onnxscript
+netron
+numpy
+packaging
