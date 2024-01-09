@@ -44,10 +44,11 @@ def main():
     # prefill mode
     if args.input_length > 1:
         assert args.cache_size > args.input_length
-        dummy_inputs = (input_ids, torch.tensor(0).long())
+        start_pos = 0
     # decode mode
     else:
-        dummy_inputs = (input_ids, torch.tensor(args.cache_size - 1).long())
+        start_pos = args.cache_size - 1
+    dummy_inputs = (input_ids, torch.tensor(start_pos).long())
     traced_model = torch.jit.trace(model, dummy_inputs,
                                    check_trace=False, strict=False)
 
@@ -61,6 +62,12 @@ def main():
     save_name += ".traced.pt"
     traced_model.save(save_name)
     logging.info("Trace Done")
+
+    with open("{}.example_input".format(save_name), "w") as f:
+        f.write("input_len = {}\n".format(args.input_length))
+        f.write("start_pos = {}\n".format(start_pos))
+        f.write("input_ids = torch.randint(0, 1000, (1, input_len)).long().cpu()\n")
+        f.write("example_input = (input_ids, torch.tensor(start_pos).long())\n")
 
     traced_model(*(dummy_inputs))
     logging.info(traced_model.graph)
