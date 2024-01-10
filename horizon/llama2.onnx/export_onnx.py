@@ -36,7 +36,8 @@ def main():
     # decode mode
     else:
         start_pos = args.cache_size - 1
-    model_args = ModelArgs(n_layers=args.n_layers,
+    model_args = ModelArgs(max_batch_size=1,
+                           n_layers=args.n_layers,
                            max_seq_len=args.cache_size,
                            group_conv=args.group_conv,
                            block_size=args.block_size,
@@ -48,6 +49,24 @@ def main():
 
     input_ids = torch.randint(0, model_args.vocab_size,
                               (1, args.input_length)).long().cpu()
+    cache_k = torch.rand(
+        model_args.max_batch_size,
+        0 if start_pos == 0 else model_args.max_seq_len - 1,
+        model_args.n_heads if model_args.n_kv_heads is None else model_args.n_kv_heads,  # noqa
+        model_args.dim // model_args.n_heads,
+    )
+    cache_v = torch.rand(
+        model_args.max_batch_size,
+        0 if start_pos == 0 else model_args.max_seq_len - 1,
+        model_args.n_heads if model_args.n_kv_heads is None else model_args.n_kv_heads,  # noqa
+        model_args.dim // model_args.n_heads,
+    )
+    rope = torch.rand(
+        model_args.max_batch_size,
+        args.input_length,
+        1,
+        model_args.dim // model_args.n_heads,
+    )
 
     os.makedirs("exp", exist_ok=True)
     save_name = "exp/llama2-7B-chat-hf-{}-".format(
@@ -63,12 +82,12 @@ def main():
 
     torch.onnx.export(
         model,
-        input_ids,
+        (input_ids, rope, cache_k, cache_v),
         save_name,
         opset_version=17,
         export_params=True,
         do_constant_folding=True,
-        input_names=['tokens'],
+        input_names=['tokens', 'rope', 'cache_k', 'cache_v'],
         output_names=['logits'],
         verbose=False
     )

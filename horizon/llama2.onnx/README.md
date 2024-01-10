@@ -9,8 +9,9 @@ pip install -r requirements.txt  -i https://pypi.hobot.cc/simple --extra-index-u
 
 # 注意
 
-1. onnx导出不支持复数（complex64，旋转位置编码中用到了），为了能顺利导出，复数运算改成了float。虽然位置编码值不一致了，但是对于目标是速度/结构分析而言，无大碍
+1. onnx导出不支持复数（complex64，旋转位置编码中用到了），为了能顺利导出，复数运算改成了float乘法。虽然计算类型不一致了，但是对于目标是速度/结构分析而言，无大碍
 2. 只能导出1层block的模型，超过1层的模型大小会超过2GB，onnx对超过2GB的模型会自动切分多个小onnx，无法形成一个完整文件，反而不利于分析，因此1层block足矣
+3. cache作为forward入参，而不是meta开源代码中在model内部维护，同时位置编码rope也作为入参。一共有四个入参[tokens, rope, cache_k, cache_v]
 
 # 使用
 

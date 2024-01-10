@@ -83,105 +83,6 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precompute the frequency tensor for complex exponentials (cis)
-    with given dimensions.
-
-    This function calculates a frequency tensor with complex exponentials
-    using the given dimension 'dim' and the end index 'end'.
-    The 'theta' parameter scales the frequencies.
-    The returned tensor contains complex values in complex64 data type.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation.
-            Defaults to 10000.0.
-
-    Returns:
-        torch.Tensor: Precomputed frequency tensor with complex exponentials.
-
-    """
-    freqs = 1.0 / (theta**(torch.arange(0, dim, 2)[:(dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)  # type: ignore
-    freqs = torch.outer(t, freqs).float()  # type: ignore
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    # NOTE(xcsong): onnx不支持complex，所以以float替代
-    # return freqs_cis
-    return freqs_cis.float()
-
-
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    """
-    Reshape frequency tensor for broadcasting it with another tensor.
-
-    This function reshapes the frequency tensor to have the same shape
-    as the target tensor 'x'
-    for the purpose of broadcasting the frequency tensor
-    during element-wise operations.
-
-    Args:
-        freqs_cis (torch.Tensor): Frequency tensor to be reshaped.
-        x (torch.Tensor): Target tensor for broadcasting compatibility.
-
-    Returns:
-        torch.Tensor: Reshaped frequency tensor.
-
-    Raises:
-        AssertionError: If the frequency tensor doesn't match
-            the expected shape.
-        AssertionError: If the target tensor 'x' doesn't have
-            the expected number of dimensions.
-    """
-    ndim = x.ndim
-    assert 0 <= 1 < ndim
-    assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-    shape = [
-        d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)
-    ]
-    return freqs_cis.view(*shape)
-
-
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor.
-
-    This function applies rotary embeddings to the given query 'xq' and
-    key 'xk' tensors using the provided frequency tensor 'freqs_cis'.
-    The input tensors are reshaped as complex numbers, and the frequency tensor
-    is reshaped for broadcasting compatibility. The resulting tensors contain
-    rotary embeddings and are returned as real tensors.
-
-    Args:
-        xq (torch.Tensor): Query tensor to apply rotary embeddings.
-        xk (torch.Tensor): Key tensor to apply rotary embeddings.
-        freqs_cis (torch.Tensor): Precomputed frequency tensor for
-            complex exponentials.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and
-            key tensor with rotary embeddings.
-
-    """
-    # NOTE(xcsong): onnx不支持complex，所以以float替代
-    # xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    # xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    # freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    # xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    # xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    # return xq_out.type_as(xq), xk_out.type_as(xk)
-    freqs_cis = freqs_cis.repeat(1, 2)
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq)
-    xq_out = (xq * freqs_cis).flatten(3)
-    xk_out = (xk * freqs_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
-
-
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
     bs, slen, n_kv_heads, head_dim = x.shape
@@ -254,31 +155,20 @@ class Attention(nn.Module):
             self.wv = HorizonGroupConv(self.wv, args.block_size)
             self.wo = HorizonGroupConv(self.wo, args.block_size)
 
-        self.cache_k = torch.zeros((
-            args.max_batch_size,
-            args.max_seq_len,
-            self.n_local_kv_heads,
-            self.head_dim,
-        ))
-        self.cache_v = torch.zeros((
-            args.max_batch_size,
-            args.max_seq_len,
-            self.n_local_kv_heads,
-            self.head_dim,
-        ))
-
     def forward(
         self,
         x: torch.Tensor,
-        freqs_cis: torch.Tensor,
+        rope: torch.Tensor,
         mask: Optional[torch.Tensor],
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor
     ):
         """
         Forward pass of the attention module.
 
         Args:
             x (torch.Tensor): Input tensor.
-            freqs_cis (torch.Tensor): Precomputed cosine and sine frequencies.
+            rope (torch.Tensor): Precomputed cosine and sine frequencies.
             mask (torch.Tensor, optional): Attention mask tensor.
 
         Returns:
@@ -292,15 +182,11 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
 
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        xq = xq * rope
+        xk = xk * rope
 
-        # mutating a non-functional tensor with a functional tensor
-        #   is not allowed.
-        # self.cache_k[:bsz, self.start_pos:self.start_pos + seqlen] = xk
-        # self.cache_v[:bsz, self.start_pos:self.start_pos + seqlen] = xv
-
-        keys = self.cache_k[:bsz, :self.start_pos + seqlen]
-        values = self.cache_v[:bsz, :self.start_pos + seqlen]
+        keys = torch.cat([cache_k, xk], dim=1)
+        values = torch.cat([cache_v, xv], dim=1)
 
         # repeat k/v heads if n_kv_heads < n_heads
         keys = repeat_kv(keys,
@@ -398,15 +284,17 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        freqs_cis: torch.Tensor,
+        rope: torch.Tensor,
         mask: Optional[torch.Tensor],
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor
     ):
         """
         Perform a forward pass through the TransformerBlock.
 
         Args:
             x (torch.Tensor): Input tensor.
-            freqs_cis (torch.Tensor): Precomputed cosine and sine frequencies.
+            rope (torch.Tensor): Precomputed cosine and sine frequencies.
             mask (torch.Tensor, optional): Masking tensor for attention.
                 Defaults to None.
 
@@ -416,7 +304,7 @@ class TransformerBlock(nn.Module):
 
         """
         h = x + self.attention.forward(self.attention_norm(x),
-                                       freqs_cis, mask)
+                                       rope, mask, cache_k, cache_v)
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
@@ -438,7 +326,7 @@ class Transformer(nn.Module):
             layers (torch.nn.ModuleList): List of Transformer blocks.
             norm (RMSNorm): Layer normalization for the model output.
             output (nn.Linear): Linear layer for final output.
-            freqs_cis (torch.Tensor): Precomputed cosine and sine frequencies.
+            rope (torch.Tensor): Precomputed cosine and sine frequencies.
 
         """
         super().__init__()
@@ -459,13 +347,16 @@ class Transformer(nn.Module):
         if params.group_conv:
             self.output = HorizonGroupConv(self.output, params.block_size)
 
-        self.freqs_cis = precompute_freqs_cis(
-            self.params.dim // self.params.n_heads,
-            self.params.max_seq_len)
         self.start_pos = params.start_pos
 
     @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor):
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        rope: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor
+    ):
         """
         Perform a forward pass through the Transformer model.
 
@@ -478,7 +369,6 @@ class Transformer(nn.Module):
         """
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
-        freqs_cis = self.freqs_cis[self.start_pos:self.start_pos + seqlen]
 
         mask = None
         if seqlen > 1:
@@ -488,7 +378,7 @@ class Transformer(nn.Module):
             mask = torch.triu(mask, diagonal=self.start_pos + 1).type_as(h)
 
         for layer in self.layers:
-            h = layer(h, freqs_cis, mask)
+            h = layer(h, rope, mask, cache_k, cache_v)
         h = self.norm(h)
         output = self.output(h).float()
         return output
