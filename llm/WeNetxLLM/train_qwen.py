@@ -33,7 +33,7 @@ config = {
   "tie_word_embeddings": True,
   "torch_dtype": "float32",  # "bfloat16"
   "transformers_version": "4.43.3",  # "4.40.1"
-  "use_cache": True,
+  "use_cache": False,  # True
   "use_mrope": False,
   "use_sliding_window": False,  # True
   "vocab_size": 151936,
@@ -163,6 +163,8 @@ def main():
             if torch.isfinite(grad_norm):
                 optimizer.step()
             optimizer.zero_grad()
+            if rank == 0:
+                print(f"Train Loss: {loss.item():.4f}")
 
         model.eval()
         total_loss = 0.0
